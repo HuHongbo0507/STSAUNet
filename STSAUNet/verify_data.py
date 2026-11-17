@@ -2,26 +2,26 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from pathlib import Path
 
 from PIL import Image
 
-from firstnet.index import discover_records, split_records, window_records
+from stsaunet.index import discover_records, split_records, window_records
 
 
 def check_dataset(data_root: str, dataset_name: str, val_fraction: float) -> None:
-    from firstnet.prepared import prepared_root
+    from stsaunet.prepared import prepared_root
     root = prepared_root(data_root, dataset_name)
     if root is not None:
         import json
-        from firstnet.experiment import audit_prepared
-        from firstnet.dataset import InfraredSequenceDataset
+        from stsaunet.experiment import audit_prepared
+        from stsaunet.dataset import InfraredSequenceDataset
         audit = audit_prepared(root)
         print(json.dumps(audit, indent=2, ensure_ascii=False))
         for split in ("train", "val", "test"):
             # A source with no val/test data is explicitly allowed to be absent.
             source = dataset_name.split("@",1)[1] if "@" in dataset_name else None
-            if source and not audit["splits"][split]["by_source"].get(source):
+            split_summary = audit["splits"][split]
+            if not split_summary["samples"] or (source and not split_summary["by_source"].get(source)):
                 print(f"{dataset_name} split={split}: no samples")
                 continue
             dataset = InfraredSequenceDataset(data_root,dataset_name,split,window_size=7)
@@ -80,21 +80,12 @@ def check_dataset(data_root: str, dataset_name: str, val_fraction: float) -> Non
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Validate FIRST-Net dataset pairing and temporal windows.")
-    parser.add_argument("--data-root", default=r"F:\FIRST-NET")
-    parser.add_argument("--dataset", default=None, help="Dataset folder or prepared FIRST source selector")
+    parser = argparse.ArgumentParser(description="Validate STSAUNet dataset pairing and temporal windows.")
+    parser.add_argument("--data-root", required=True, help="External dataset directory or its parent.")
+    parser.add_argument("--dataset", required=True, help="Dataset folder or prepared STSAU source selector")
     parser.add_argument("--val-fraction", type=float, default=0.1)
     args = parser.parse_args()
-    names = [args.dataset] if args.dataset else ["FIRST_dataset", "NUDT-MIRSDT", "NUDT-MIRSDT1"]
-    failures = []
-    for name in names:
-        try:
-            check_dataset(args.data_root, name, args.val_fraction)
-        except Exception as exc:
-            failures.append(f"{name}: {exc}")
-            print(f"\nVALIDATION BLOCKED for {name}: {exc}")
-    if failures:
-        raise SystemExit(f"Validation failed for {len(failures)} dataset(s).")
+    check_dataset(args.data_root, args.dataset, args.val_fraction)
 
 
 if __name__ == "__main__":

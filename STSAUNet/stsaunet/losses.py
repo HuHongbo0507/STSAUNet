@@ -6,7 +6,7 @@ from torch import nn
 from torch.nn import functional as F
 
 
-class FIRSTNetLoss(nn.Module):
+class STSAUNetLoss(nn.Module):
     def __init__(self, reconstruction_weight: float = 0.01, alignment_weight: float = 0.01,
                  segmentation_mode: str = "baseline", hard_negative_ratio: float = 3.0,
                  minimum_negatives: int = 256):

@@ -1,155 +1,81 @@
-# FIRST-Net
+# STSAUNet
 
-A standalone FIRST-Net implementation for datasets under F:\FIRST-NET. The model combines RPCANet-style joint temporal-channel background/target separation with deformable alignment and center-frame mask prediction. The generic default is five frames; the FIRST_prepared experiment below explicitly uses seven.
+这是面向红外小目标分割的 STSAUNet 独立源码目录。以推荐的七帧配置为例，模型输入为 `[B,7,1,H,W]`，将帧和通道合并为 `[B,7,H,W]`，依次展开更新背景与稀疏目标。随后恢复时间维，以 `grid_sample` 实现可变形时序对齐，输出第 4 帧的分割 logits `[B,1,H,W]`。预备数据格式采用 256×256 灰度帧。不需要 MMCV、自定义 CUDA 扩展或其他模型仓库。
 
-## Implementation choices
+本目录不提供数据、权重或实验结果。项目许可证待权利人确认，第三方来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-- The earlier implementation used frame-wise separation. The joint_tc experiment below changes unfolding to jointly update the temporal block, followed by deformable alignment and center-frame prediction.
-- The unfolding stage keeps separate learnable background-proximal and sparse-target-gradient operators. It avoids explicit SVD.
-- The alignment layer predicts 18 offsets for a 3x3 deformable kernel and uses PyTorch grid_sample for bilinear sampling. It does not require MMCV compiled operators.
-- DeRef_Net's ISTA_TDANNet is designed around 11x11 images, XML annotations, and hard-coded .mat initialization paths. Those parts are not reused because the provided datasets contain raster frames and pixel masks.
-- NUDT-MIRSDT and NUDT-MIRSDT1 prefer train1.txt/test1.txt because they point to images. The train.txt/test.txt variants point to Mix MAT files and are accepted as fallback split lists. Validation uses unlisted complete sequences when present; if every sequence is already assigned to train/test, validation holds out whole sequences from the training list. The stale absolute paths in train2.txt/test2.txt are not used.
-- Inputs are grayscale and normalized to [0,1]. Images use bilinear resizing, masks use nearest-neighbor resizing and are binarized.
-- Sequence edges use replicated frames by default. Select reflect for reflected indexing.
+## 安装
 
-## FIRST_dataset pairing needs confirmation
+使用 Python 3.10 或更高版本。进入本目录，在独立的 Python 环境中执行：
 
-The image directory contains groups 00003, 00004, 00008, 00009, and 00010 with frame IDs 0-6. The mask directory contains groups 00001-00005 with frame IDs 1-7. Exact filename pairing is not possible. Visual and pixel checks confirm that 00003-0 aligns with 00003-1 and 00004-0 aligns with 00004-1, so those two mappings are recorded in first_dataset_pairs.csv with an offset of +1. The other three mappings cannot be established reliably from filenames and must be confirmed before FIRST_dataset training. The loader stops with an actionable error rather than assigning masks by sort order.
-
-Edit first_dataset_pairs.csv in this folder after confirming the correspondence. Each row means: image_sequence,mask_sequence,frame_offset. For example, 00003,00003,1 pairs image 00003-0.png with mask 00003-1.png. Each image sequence must map to exactly one mask sequence, and every mask file must be used once.
-
-## Environment
-
-Use Python 3.10 or newer and install a PyTorch build that matches your OS and CUDA version. Then install the remaining requirements from this folder:
-
-    python -m pip install -r requirements.txt
-
-MMCV, MMEngine, OpenCV, and SciPy are not required for model training. If OpenCV is installed, object component metrics are computed faster; otherwise a pure Python fallback is used.
-
-## Validate the datasets
-
-From this folder:
-
-    python verify_data.py --dataset NUDT-MIRSDT
-    python verify_data.py --dataset NUDT-MIRSDT1
-
-To validate FIRST_dataset after its mapping file is complete:
-
-    python verify_data.py --dataset FIRST_dataset
-
-The validator checks image/mask pairing, readability, dimensions, sequence-level splits, and same-sequence five-frame windows. It does not change data.
-
-## Train
-
-Defaults to the full NUDT-MIRSDT dataset at 256x256:
-
-    python train.py
-
-Choose another dataset:
-
-    python train.py --dataset NUDT-MIRSDT --epochs 100 --batch-size 2 --image-size 256
-
-Run the shortened NUDT-MIRSDT1 subset:
-
-    python train.py --dataset NUDT-MIRSDT1 --epochs 100 --batch-size 2
-
-Training outputs go to runs/<dataset>-<timestamp>/ by default. Each run contains config.json, history.csv, train.log, last.pt, and best.pt. For a small GPU, lower batch size, image size, feature channels, or unfolding channels. Use --image-size 0 to preserve native resolution; if native sizes vary, use batch size 1.
-
-Important options include --window-size (must be odd), --boundary (replicate or reflect), --stages, --feature-channels, --max-offset, --reconstruction-weight, and --alignment-weight. Adam uses a default learning rate of 1e-4. Reconstruction and alignment weights default to 0.01.
-
-## Evaluate
-
-Use test sequences and a saved checkpoint:
-
-    python evaluate.py --checkpoint runs/NUDT-MIRSDT-YYYYMMDD-HHMMSS/best.pt --dataset NUDT-MIRSDT --split test
-
-If --dataset is omitted, the checkpoint's dataset is used. Evaluation reports pixel IoU, Precision, Recall, F1, object-level PD (centroid tolerance 3 pixels), and pixel false-alarm rate FA (false-positive pixels divided by background pixels). PD and FA definitions should be checked against a paper's protocol before comparing values.
-
-## Infer on one sequence
-
-    python infer.py --checkpoint runs/NUDT-MIRSDT-YYYYMMDD-HHMMSS/best.pt --dataset NUDT-MIRSDT --sequence Sequence1
-
-Inference writes probability maps and 0/255 binary masks under predictions/<dataset>/<sequence>/. Original frame names and dimensions are retained.
-
-## Minimal model check
-
-After installing PyTorch, run:
-
-    python -c "import torch; from firstnet.model import FIRSTNet; m=FIRSTNet(); x=torch.rand(1,5,1,64,64); y=m(x); print({k: tuple(v.shape) for k,v in y.items()})"
-
-The logits and reconstruction should each have shape (1,1,64,64).
-
-## FIRST_prepared joint unfolding experiment (2026-11-03)
-
-The model now defaults to `unfolding_mode=joint_tc`. A sample is `[T,1,H,W]`;
-DataLoader returns `[B,T,1,H,W]`. Before FeatureSeparation, only T and C are
-packed to `[B,T*C,H,W]`, with `packed[b,t*C+c]=frames[b,t,c]`. Each background
-proximal, sparse gradient and reconstruction operator uses Conv2d with groups=1
-across all TC channels. All six stages therefore update the seven-frame block
-jointly. The frame dimension is restored before per-frame feature extraction,
-deformable alignment and center-frame fusion. The later B*T feature extraction
-is intentional; unfolding has already used the temporal block.
-
-`framewise` is retained only as an explicit legacy option. Old checkpoints without
-an unfolding_mode field are loaded in framewise mode by evaluate.py and infer.py;
-the new experiment starts from random weights and stores its joint mode.
-
-The reconstruction term is now the mean of center-frame fused reconstruction MSE
-and all-frame final unfolded reconstruction MSE. This connects the final merge
-operator to supervision. The total remains BCEWithLogits + soft IoU + 0.01 times
-reconstruction + 0.01 times alignment at the default weights. This joint unfolding
-and additional unfolded reconstruction constraint are experiment changes, rather
-than an assertion that the earlier framewise implementation already had them.
-
-Use the prepared active manifests without re-splitting. Each sample uses all
-seven frames, predicts frame 4, and preserves the existing 256x256 crops.
-
-```powershell
-Set-Location 'F:\FIRST-NET\FIRSTNet'
-& 'D:\Anaconda3\envs\py310rpca\python.exe' .\verify_data.py --dataset FIRST_prepared
-& 'D:\Anaconda3\envs\py310rpca\python.exe' -u .\train.py --data-root 'F:\FIRST-NET' --dataset FIRST_prepared --epochs 20 --batch-size 2 --workers 0 --window-size 7 --image-size 256 --device cuda --lr 1e-4 --seed 1 --unfolding-mode joint_tc --stages 6 --unfold-channels 32 --feature-channels 32 --reconstruction-weight 0.01 --alignment-weight 0.01 --check-inputs --evaluate-at-end
+```sh
+python -m pip install -r requirements.txt
 ```
 
-`--check-inputs` checks active split equality and parent isolation, full-size real
-training samples, forward hooks for all stages, exact TC ordering/round-trip,
-neighbor perturbation with unchanged center, batch independence, finite losses
-and all gradients, and one Adam update on a throwaway model. Formal training is
-re-seeded afterward. Only an actual CUDA OOM triggers batch-size fallback to 1.
+若需要 GPU，请先通过 [PyTorch 安装说明](https://pytorch.org/get-started/locally/)为当前平台选装 CUDA 版本。命令支持 `--device cpu`、`--device cuda` 或自动选择的 `--device auto`。OpenCV 可选，用于加速连通域计算；未安装时使用内置回退实现。
 
-Runs have environment.json, source/ and source_sha256.json, data_audit.json,
-input_check.json, config.json, train.log, status.json, history.csv, validation/
-per epoch, atomic best.pt and last.pt, and training_summary.json. After exactly
-20 full epochs, `--evaluate-at-end` loads the validation-IoU-selected best.pt,
-runs a single test pass at fixed threshold 0.5, and writes test_metrics.json,
-summary.json, plus two example clips per available test source. Examples include
-center image, true mask, probability PNG/float NPY, binary prediction and a montage.
+## 准备外部数据
 
-Grouped validation/test reports contain pooled pixel metrics overall, by source,
-and by annotation type. bbox_weak is a filled-box metric and must be interpreted
-separately from pixel_mask. WideIRSTD is training only. Object-level PD uses
-8-connected component centroids, greedy one-to-one matching within 3 pixels;
-FA is false-positive pixels divided by ground-truth background pixels. These are
-implementation definitions, not automatic comparability with other papers.
+`--data-root` 若直接指向含 `manifest.jsonl` 的数据根目录，`--dataset STSAU_wide9000` 只是逻辑名称，无需重命名磁盘上的数据目录。若传入的是父目录，`--dataset` 需要与实际子目录名一致。推荐使用以下预备数据格式：
 
-To inspect progress, read runs/<run>/status.json or the tail of train.log. Only
-status=completed means training and requested final testing both finished;
-training_summary.json alone means training finished but testing may still run.
-A traceback and status=failed identify an actual failure.
+```text
+<dataset root>/
+  manifest.jsonl
+  splits/
+    train.jsonl
+    val.jsonl
+    test.jsonl
+  sources/
+    <source_dataset>/<source_sequence>/<clip_id>/
+      images/00001.png ... 00007.png
+      masks/00001.png ... 00007.png
+```
 
-## Controlled detection-improvement options
+每个 JSONL 行对应一个片段，字段如下。列表中的路径相对数据根目录；每个划分中的记录须与总清单中对应的记录完全一致。
 
-`--sampling uniform|real_synthetic|source_balanced` defaults to the original
-uniform policy. Balanced policies use prepared manifest groups and replacement,
-with exactly len(dataset) draws per epoch; no extra optimizer steps. Source,
-annotation and unique-clip draws are saved in sampling/epoch-XXX.json.
-`--segmentation-loss baseline|hard_bce` defaults to the original objective.
-Hard BCE selects all positives plus the largest-loss background pixels, with
-`--hard-negative-ratio 3 --minimum-negatives 256`; soft IoU and the existing
-auxiliary loss definitions/weights are retained. The checkpoint saves the loss
-configuration; evaluate.py reconstructs it. New options do not change inference
-architecture or old checkpoint loading.
+| 字段 | 含义 |
+| --- | --- |
+| `source_dataset`、`source_sequence`、`clip_id` | 来源、序列和片段 ID，与目录名一致 |
+| `parent_sequence` | 母序列 ID；同一来源的同一母序列只能属于一个划分 |
+| `split` | `train`、`val` 或 `test` |
+| `source_frame_ids`、`center_frame` | 7 个递增且连续的原始帧号；`center_frame` 固定填 4（从 1 开始计） |
+| `images`、`masks` | 按时间排序的 7 个相对 PNG 路径，每帧为 256×256；标签为 0 或 255 |
+| `annotation_type` | 例如精确像素标注 `pixel_mask`、填充框弱标注 `bbox_weak` 或重渲染标注 `resized_synthetic_pixel_mask`；评价按该字段分别汇总 |
+| `generated` | 布尔值；`real_synthetic` 按该值分为两组。未标记为生成的公开来源不等于原生实拍 |
 
-Real ROC/PR, probability caches, complexity profiling, tests and the bounded
-20-epoch single-factor/combined study are in F:\FIRST-NET\Metric; see its README.md.
-Only validation selects the winner. Existing FIRST_prepared and first7 runs remain
-as independent preserved records.
+预备数据只按明确的划分索引读取；每个片段取第 4 帧 mask 监督，整段连续帧作为输入。若使用 WideIRSTD 生成片段，放在训练划分。不使用清单的 `STSAU_dataset` 布局使用 `STSAU/` 存放图像、`STSAUmasks/` 存放掩码，可由外部数据目录中的 `stsau_dataset_pairs.csv` 提供配对，列为 `image_sequence,mask_sequence,frame_offset`；本包不包含实际配对表。
+
+```sh
+python verify_data.py --data-root /path/to/dataset --dataset STSAU_wide9000
+```
+
+## 训练与推理
+
+将示例命令中的 `/path/to/dataset` 替换为你的数据目录（路径有空格时加引号）。50 轮示例配置位于 [configs/wide9000_50ep.args](configs/wide9000_50ep.args)，一行写一个参数名或值。它使用七帧、256×256、batch 2、Adam（学习率 1e-4）、seed 1，以及均衡有放回采样与困难背景 BCE + soft IoU。均衡采样每轮抽取训练集大小相同的次数，并不保证每个独立片段都出现。
+
+```sh
+python train.py "@configs/wide9000_50ep.args" --data-root /path/to/dataset --output-dir outputs/train --device auto
+python infer.py --checkpoint outputs/train/best.pt --data-root /path/to/dataset --dataset STSAU_wide9000 --output-dir outputs/predictions --device auto
+```
+
+训练从头初始化，按验证 IoU 保存 `best.pt`，每轮更新 `last.pt`。也可将 `--checkpoint` 换成用户自有的 STSAUNet 检查点（含 `model_config`、`model_state`）。只加载可信来源的 PyTorch 检查点。推理保存便于查看的灰度概率图和二值 mask；这些 PNG 不用于计算 ROC/PR。
+
+## 评估和复杂度
+
+```sh
+python evaluate.py --checkpoint outputs/train/best.pt --data-root /path/to/dataset --dataset STSAU_wide9000 --split test --output-json outputs/test_scores.json --device auto
+python -m stsaunet.benchmark.evaluate --checkpoint outputs/train/best.pt --data-root /path/to/dataset --dataset STSAU_wide9000 --split test --output-dir outputs/test_curves --device auto
+python -m stsaunet.benchmark.roc --inputs outputs/test_curves --output outputs/test_roc --low-fpr
+python -m stsaunet.benchmark.pr --inputs outputs/test_curves --output outputs/test_pr
+python -m stsaunet.benchmark.profile_model --checkpoint outputs/train/best.pt --shape 1 7 1 256 256 --device auto --output outputs/complexity.json
+```
+
+基础评估给出固定阈值 0.5 下的 IoU、Precision、Recall、F1、PD 和 FA。PD 按 8 连通目标的质心在 3 像素内做一对一匹配，FA 是误报背景像素数除以真值背景像素总数。曲线入口使用预备数据中心帧 logits 的原始 sigmoid 浮点概率，按全像素、来源和标注类型分别输出指标。ROC 以像素 FPR 为横轴、TPR 为纵轴；低 FPR 指标取在给定误报预算下的最高观测 TPR，不插值。AP 和梯形 PR-AUC 分开报告；`--mode exact` 使用原始分数，数据量大时可选 `--mode histogram` 近似。绘图入口读取已导出的曲线；叠加曲线时要求各组数据使用同一批有序样本。若需要选择阈值，应先在验证集确定，再固定到测试集。
+
+复杂度统计包含一次完整片段推理和辅助重建头；卷积按 1 MAC = 2 FLOPs，采样及部分逐元素操作使用估算规则。输出 JSON 区分卷积计数、估算总量与未计数算子，不能把估算总量当作硬件实测。
+
+可以不使用数据或权重做 CPU 前向检查：
+
+```sh
+python -c "import torch; from stsaunet.model import STSAUNet; m=STSAUNet(window_size=7).eval(); print(torch.no_grad()(m)(torch.rand(1,7,1,16,16))['logits'].shape)"
+```

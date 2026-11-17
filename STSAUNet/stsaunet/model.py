@@ -1,4 +1,4 @@
-"""FIRST-Net: RPCANet-style unfolding with five-frame deformable alignment."""
+"""STSAUNet: joint temporal-channel unfolding and deformable alignment."""
 from __future__ import annotations
 
 import torch
@@ -18,21 +18,25 @@ def _conv_block(in_channels: int, out_channels: int) -> nn.Sequential:
 class DeepUnfoldingStage(nn.Module):
     """Learned proximal/gradient updates for background and sparse target maps."""
 
-    def __init__(self, channels: int = 32):
+    def __init__(self, channels: int = 32, input_channels: int = 1):
         super().__init__()
-        self.background_prox = _conv_block(1, channels)
-        self.background_out = nn.Conv2d(channels, 1, kernel_size=3, padding=1)
-        self.sparse_gradient = _conv_block(1, channels)
-        self.sparse_out = nn.Conv2d(channels, 1, kernel_size=3, padding=1)
+        self.input_channels = input_channels
+        # groups=1: every output frame can use every input frame in this clip.
+        self.background_prox = _conv_block(input_channels, channels)
+        self.background_out = nn.Conv2d(channels, input_channels, kernel_size=3, padding=1)
+        self.sparse_gradient = _conv_block(input_channels, channels)
+        self.sparse_out = nn.Conv2d(channels, input_channels, kernel_size=3, padding=1)
         self.merge = nn.Sequential(
-            nn.Conv2d(1, channels, kernel_size=3, padding=1),
+            nn.Conv2d(input_channels, channels, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(channels, 1, kernel_size=3, padding=1),
+            nn.Conv2d(channels, input_channels, kernel_size=3, padding=1),
         )
         self.gamma_logit = nn.Parameter(torch.tensor(0.0))
         self.epsilon_logit = nn.Parameter(torch.tensor(-4.5951))
 
     def forward(self, image: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if image.ndim != 4 or image.shape[1] != self.input_channels or target.shape != image.shape:
+            raise ValueError("Unfolding expects matching B,TC,H,W image/target blocks")
         background_input = image - target
         background = background_input + self.background_out(self.background_prox(background_input))
         residual = target + image - background
@@ -46,9 +50,11 @@ class DeepUnfoldingStage(nn.Module):
 
 
 class FeatureSeparation(nn.Module):
-    def __init__(self, stages: int = 6, channels: int = 32):
+    def __init__(self, stages: int = 6, channels: int = 32, input_channels: int = 1):
         super().__init__()
-        self.stages = nn.ModuleList([DeepUnfoldingStage(channels) for _ in range(stages)])
+        if stages < 1:
+            raise ValueError("stages must be positive")
+        self.stages = nn.ModuleList([DeepUnfoldingStage(channels, input_channels) for _ in range(stages)])
 
     def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         target = torch.zeros_like(images)
@@ -125,7 +131,7 @@ class DeformableAlign(nn.Module):
         return aligned + self.refine(aligned), offsets
 
 
-class FIRSTNet(nn.Module):
+class STSAUNet(nn.Module):
     def __init__(
         self,
         window_size: int = 5,
@@ -133,12 +139,18 @@ class FIRSTNet(nn.Module):
         unfold_channels: int = 32,
         feature_channels: int = 32,
         max_offset: float = 3.0,
+        unfolding_mode: str = "joint_tc",
     ):
         super().__init__()
         if window_size < 1 or window_size % 2 != 1:
             raise ValueError("window_size must be a positive odd integer")
         self.window_size = window_size
-        self.separation = FeatureSeparation(stages, unfold_channels)
+        if unfolding_mode not in ("joint_tc", "framewise"):
+            raise ValueError("unfolding_mode must be joint_tc or framewise")
+        self.unfolding_mode = unfolding_mode
+        self.separation = FeatureSeparation(
+            stages, unfold_channels, window_size if unfolding_mode == "joint_tc" else 1
+        )
         self.target_features = nn.Sequential(
             nn.Conv2d(1, feature_channels, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
@@ -162,10 +174,16 @@ class FIRSTNet(nn.Module):
         if time != self.window_size:
             raise ValueError(f"Model expects {self.window_size} frames, received {time}")
         if channels != 1:
-            raise ValueError(f"FIRST-Net expects single-channel grayscale input, received {channels} channels")
+            raise ValueError(f"STSAUNet expects single-channel grayscale input, received {channels} channels")
 
-        flat = frames.reshape(batch * time, channels, height, width)
-        background, target, reconstruction = self.separation(flat)
+        if self.unfolding_mode == "joint_tc":
+            # Temporal-major packing: packed[b, t*C+c] = frames[b, t, c].
+            # Batch stays independent throughout every unfolding stage.
+            blocks = frames.reshape(batch, time * channels, height, width)
+        else:
+            # Explicit compatibility path for checkpoints produced before joint unfolding.
+            blocks = frames.reshape(batch * time, channels, height, width)
+        background, target, reconstruction = self.separation(blocks)
         background = background.reshape(batch, time, 1, height, width)
         target = target.reshape(batch, time, 1, height, width)
         reconstruction = reconstruction.reshape(batch, time, 1, height, width)
@@ -191,6 +209,7 @@ class FIRSTNet(nn.Module):
         return {
             "logits": logits,
             "reconstruction": reconstructed_center,
+            "unfolding_reconstruction": reconstruction,
             "background": background[:, center_index],
             "target": target[:, center_index],
             "aligned_features": torch.stack(aligned_features, dim=1),

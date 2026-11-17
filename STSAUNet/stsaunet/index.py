@@ -1,4 +1,4 @@
-"""Filesystem indexing and deterministic sequence splits for FIRST-Net."""
+"""Filesystem indexing and deterministic sequence splits for STSAUNet."""
 from __future__ import annotations
 
 import csv
@@ -43,7 +43,7 @@ def _prepared_records(root, dataset, split='all'):
             if source and row['source_dataset'] != source:
                 continue
             if len(row['images']) != 7 or len(row['masks']) != 7 or row['center_frame'] != 4:
-                raise ValueError('Invalid FIRST prepared clip')
+                raise ValueError('Invalid STSAU prepared clip')
             sequence = f"{row['source_dataset']}/{row['source_sequence']}/{row['clip_id']}"
             for index, (image, mask) in enumerate(zip(row['images'], row['masks']), 1):
                 records.append(FrameRecord(dataset, sequence, index, root / image, root / mask))
@@ -59,7 +59,7 @@ def _frame_sort_key(record: FrameRecord) -> tuple[int, str]:
     return (record.frame_index, record.image_path.name.lower())
 
 
-def _first_sequence_and_frame(stem: str) -> tuple[str, int]:
+def _stsau_sequence_and_frame(stem: str) -> tuple[str, int]:
     match = re.match(r"^(.*)-(\d+)$", stem)
     if match:
         return match.group(1), int(match.group(2))
@@ -79,11 +79,7 @@ def _list_sequence_and_stem(line: str) -> tuple[str, str] | None:
     return match.group(1), Path(filename).stem
 
 
-def _first_mapping_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "first_dataset_pairs.csv"
-
-
-def _read_first_mapping(path: Path) -> dict[str, tuple[str, int]]:
+def _read_stsau_mapping(path: Path) -> dict[str, tuple[str, int]]:
     if not path.is_file():
         return {}
     mapping: dict[str, tuple[str, int]] = {}
@@ -96,7 +92,7 @@ def _read_first_mapping(path: Path) -> dict[str, tuple[str, int]]:
                 continue
             if not mask_sequence:
                 raise ValueError(
-                    f"FIRST_dataset mapping is incomplete for image sequence {image_sequence}. "
+                    f"STSAU_dataset mapping is incomplete for image sequence {image_sequence}. "
                     f"Fill mask_sequence in {path} after confirming the annotation correspondence."
                 )
             try:
@@ -119,20 +115,20 @@ def discover_records(data_root: str | Path, dataset: str) -> tuple[Path, list[Fr
 
     records: list[FrameRecord] = []
     errors: list[str] = []
-    if dataset == "FIRST_dataset":
-        image_dir = root / "FIRST"
-        mask_dir = root / "FIRSTmasks"
+    if dataset == "STSAU_dataset":
+        image_dir = root / "STSAU"
+        mask_dir = root / "STSAUmasks"
         if not image_dir.is_dir() or not mask_dir.is_dir():
             raise FileNotFoundError(
-                f"Expected FIRST and FIRSTmasks directories under {root}"
+                f"Expected STSAU and STSAUmasks directories under {root}"
             )
-        mapping_path = _first_mapping_path()
-        mapping = _read_first_mapping(mapping_path)
+        mapping_path = root / "stsau_dataset_pairs.csv"
+        mapping = _read_stsau_mapping(mapping_path)
         mask_lookup: dict[tuple[str, int], Path] = {}
         for mask in mask_dir.iterdir():
             if not mask.is_file() or mask.suffix.lower() not in IMAGE_EXTENSIONS:
                 continue
-            sequence, frame = _first_sequence_and_frame(mask.stem)
+            sequence, frame = _stsau_sequence_and_frame(mask.stem)
             key = (sequence.lower(), frame)
             if key in mask_lookup:
                 errors.append(f"duplicate mask sequence/frame: {mask}")
@@ -145,7 +141,7 @@ def discover_records(data_root: str | Path, dataset: str) -> tuple[Path, list[Fr
         images.sort(key=lambda p: p.name.lower())
         used_masks: set[Path] = set()
         for image in images:
-            sequence, frame = _first_sequence_and_frame(image.stem)
+            sequence, frame = _stsau_sequence_and_frame(image.stem)
             mask_sequence, frame_offset = mapping.get(sequence.lower(), (sequence, 1))
             mask = mask_lookup.get((mask_sequence.lower(), frame + frame_offset))
             if mask is None:
@@ -169,7 +165,7 @@ def discover_records(data_root: str | Path, dataset: str) -> tuple[Path, list[Fr
             preview = "\n".join(f"  - {item}" for item in errors[:20])
             suffix = f"\n  ... and {len(errors) - 20} more" if len(errors) > 20 else ""
             raise ValueError(
-                f"FIRST_dataset pairing/layout errors ({len(errors)}):\n{preview}{suffix}\n"
+                f"STSAU_dataset pairing/layout errors ({len(errors)}):\n{preview}{suffix}\n"
                 f"Image groups and mask groups do not fully match. Confirm the labels, then edit {mapping_path} "
                 "with image_sequence,mask_sequence,frame_offset rows. Do not infer a mapping from sort order."
             )
@@ -278,7 +274,7 @@ def split_records(
     root, all_records = discover_records(data_root, dataset)
     if (root / 'manifest.jsonl').is_file():
         selected = all_records if split == 'all' else _prepared_records(root, dataset, split)
-        return root, selected, {'source': 'explicit FIRST prepared manifest; original-parent grouped splits'}
+        return root, selected, {'source': 'explicit STSAU prepared manifest; original-parent grouped splits'}
     if split == "all":
         return root, all_records, {
             "source": "all indexed pairs",
@@ -286,8 +282,8 @@ def split_records(
         }
 
     lookup = {(r.sequence.lower(), r.image_path.stem.lower()): r for r in all_records}
-    official_train = None if dataset == "FIRST_dataset" else _official_list(root, "train", lookup)
-    official_test = None if dataset == "FIRST_dataset" else _official_list(root, "test", lookup)
+    official_train = None if dataset == "STSAU_dataset" else _official_list(root, "train", lookup)
+    official_test = None if dataset == "STSAU_dataset" else _official_list(root, "test", lookup)
 
     if official_train and official_test:
         train_sequences = sorted({r.sequence for r in official_train}, key=_sequence_sort_key)

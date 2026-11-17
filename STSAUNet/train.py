@@ -12,23 +12,26 @@ import sys
 import time
 import traceback
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from firstnet.dataset import InfraredSequenceDataset
-from firstnet.evaluation import evaluate_loader
-from firstnet.experiment import audit_prepared, check_unfolding, environment_info, sha256, write_json
-from firstnet.losses import FIRSTNetLoss
-from firstnet.model import FIRSTNet
-from firstnet.sampling import make_sampler
+from stsaunet.dataset import InfraredSequenceDataset
+from stsaunet.evaluation import evaluate_loader
+from stsaunet.experiment import audit_prepared, check_unfolding, environment_info, sha256, write_json
+from stsaunet.losses import STSAUNetLoss
+from stsaunet.model import STSAUNet
+from stsaunet.sampling import make_sampler
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Train FIRST-Net with joint temporal-channel unfolding.')
-    parser.add_argument('--data-root', default=r'F:\FIRST-NET')
+    parser = argparse.ArgumentParser(
+        description='Train STSAUNet with joint temporal-channel unfolding.',
+        fromfile_prefix_chars='@',
+        epilog='Read one flag or value per line from @configs/wide9000_50ep.args. Later flags override earlier values.',
+    )
+    parser.add_argument('--data-root', required=True, help='External dataset directory or its parent.')
     parser.add_argument('--dataset', default='NUDT-MIRSDT')
     parser.add_argument('--output-dir', default=None)
     parser.add_argument('--epochs', type=int, default=100)
@@ -84,7 +87,7 @@ def main():
     if min(args.epochs,args.batch_size,args.stages,args.unfold_channels,args.feature_channels) < 1 or args.workers < 0:
         raise ValueError('Invalid positive training parameter')
     device = choose_device(args.device)
-    stamp = datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d-%H%M%S')
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     output_dir = Path(args.output_dir) if args.output_dir else Path('runs')/f'{args.dataset}-{stamp}'
     output_dir = output_dir.resolve()
     if output_dir.exists() and any((output_dir/name).exists() for name in ('status.json','config.json','train.log','best.pt','last.pt','history.csv')):
@@ -93,10 +96,10 @@ def main():
     state = dict(status='preparing',pid=os.getpid(),output_dir=str(output_dir),completed_epochs=0,target_epochs=args.epochs)
     def status(**updates):
         state.update(updates)
-        state['updated_at'] = datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()
+        state['updated_at'] = datetime.now().astimezone().isoformat()
         write_json(output_dir/'status.json',state)
     def report(message):
-        line = f'[{datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")}] {message}'
+        line = f'[{datetime.now().astimezone().isoformat(timespec="seconds")}] {message}'
         print(line, flush=True)
         with (output_dir/'train.log').open('a',encoding='utf-8') as stream:
             stream.write(line+'\n')
@@ -107,7 +110,7 @@ def main():
         # Reconstructable code snapshot for this exact run, independent of later edits.
         source_root = Path(__file__).resolve().parent
         source_paths = [source_root/'train.py',source_root/'evaluate.py',source_root/'infer.py',source_root/'verify_data.py',source_root/'README.md']
-        source_paths += list((source_root/'firstnet').glob('*.py'))
+        source_paths += sorted((source_root/'stsaunet').rglob('*.py'))
         hashes = {}
         for source in source_paths:
             relative = source.relative_to(source_root)
@@ -168,8 +171,8 @@ def main():
         train_loader = DataLoader(train_data,batch_size=args.batch_size,shuffle=sampler is None,sampler=sampler,
                                   num_workers=args.workers,pin_memory=device.type=='cuda')
         val_loader = DataLoader(val_data,batch_size=args.batch_size,shuffle=False,num_workers=args.workers,pin_memory=device.type=='cuda')
-        model = FIRSTNet(**model_config).to(device)
-        criterion = FIRSTNetLoss(args.reconstruction_weight,args.alignment_weight,**loss_config)
+        model = STSAUNet(**model_config).to(device)
+        criterion = STSAUNetLoss(args.reconstruction_weight,args.alignment_weight,**loss_config)
         optimizer = torch.optim.Adam(model.parameters(),lr=args.lr,betas=(0.9,0.999))
         best_iou, best_epoch = -1.0, 0
         start = time.perf_counter()
@@ -249,7 +252,7 @@ def main():
             del optimizer,checkpoint
             gc.collect()
             if device.type=='cuda': torch.cuda.empty_cache()
-            checkpoint = torch.load(output_dir/'best.pt',map_location='cpu')
+            checkpoint = torch.load(output_dir/'best.pt',map_location='cpu',weights_only=False)
             model.load_state_dict(checkpoint['model_state'])
             test_data = InfraredSequenceDataset(split='test',**common_data)
             test_loader = DataLoader(test_data,batch_size=args.batch_size,shuffle=False,num_workers=args.workers,pin_memory=device.type=='cuda')

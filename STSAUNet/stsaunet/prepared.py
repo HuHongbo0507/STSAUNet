@@ -1,4 +1,4 @@
-"""Manifest-based FIRST clips: one center-frame sample per seven-frame clip."""
+"""Manifest-based STSAU clips: one center-frame sample per seven-frame clip."""
 from __future__ import annotations
 
 from collections import Counter,defaultdict
@@ -21,8 +21,8 @@ def prepared_root(data_root,dataset):
 
 class PreparedClipDataset(Dataset):
     def __init__(self,root,dataset,split,window_size=5,image_size=256,sequence=None):
-        if window_size not in [1,3,5,7]:raise ValueError('Prepared FIRST uses 1,3,5,7 frames around frame 4')
-        if image_size not in [None,256]:raise ValueError('Prepared FIRST must preserve its verified 256x256 crops')
+        if window_size not in [1,3,5,7]:raise ValueError('Prepared STSAU uses 1,3,5,7 frames around frame 4')
+        if image_size not in [None,256]:raise ValueError('Prepared STSAU must preserve its verified 256x256 crops')
         if split not in ['train','val','test','all']:raise ValueError('invalid split')
         self.root=Path(root);self.dataset_name=dataset;self.split=split;self.window_size=window_size
         source=dataset.split('@',1)[1] if '@' in dataset else None
@@ -44,7 +44,7 @@ class PreparedClipDataset(Dataset):
                 row['_key']=key
                 self.records.append(row);self.sequence_records[key].append(row)
         if not self.records:raise ValueError(f'No samples for dataset={dataset}, split={split}; WideIRSTD has training only')
-        self.split_info=dict(source='verified explicit FIRST clip manifest; no per-frame re-splitting',source_filter=source)
+        self.split_info=dict(source='verified explicit STSAU clip manifest; no per-frame re-splitting',source_filter=source)
 
     def __len__(self):return len(self.records)
 

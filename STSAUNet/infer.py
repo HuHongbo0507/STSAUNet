@@ -8,15 +8,15 @@ import torch
 from PIL import Image
 from torch.utils.data import DataLoader
 
-from firstnet.dataset import InfraredSequenceDataset
-from firstnet.model import FIRSTNet
+from stsaunet.dataset import InfraredSequenceDataset
+from stsaunet.model import STSAUNet
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run FIRST-Net on one sequence or a dataset.")
+    parser = argparse.ArgumentParser(description="Run STSAUNet on one sequence or a dataset.")
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--data-root", default=r"F:\FIRST-NET")
-    parser.add_argument("--dataset", default=None, help="Dataset folder or prepared FIRST source selector, e.g. FIRST_prepared@SIATD")
+    parser.add_argument("--data-root", required=True, help="External dataset directory or its parent.")
+    parser.add_argument("--dataset", default=None, help="Dataset folder or prepared STSAU source selector, e.g. STSAU_prepared@SIATD")
     parser.add_argument("--sequence", default=None, help="Optional sequence name, e.g. Sequence1 or 00003.")
     parser.add_argument("--output-dir", default="predictions")
     parser.add_argument("--image-size", type=int, default=None, help="Defaults to checkpoint setting; use 0 for native size.")
@@ -38,10 +38,10 @@ def main() -> None:
     run_config = checkpoint.get("run_config", {})
     model_config = dict(checkpoint.get("model_config", run_config.get("model", {})))
     model_config.setdefault("unfolding_mode", "framewise")
-    dataset_name = args.dataset or run_config.get("dataset", "FIRST_dataset")
+    dataset_name = args.dataset or run_config.get("dataset", "STSAU_dataset")
     size = args.image_size if args.image_size is not None else run_config.get("image_size", 256)
     image_size = size if size and size > 0 else None
-    model = FIRSTNet(**model_config).to(device)
+    model = STSAUNet(**model_config).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
 

@@ -1,4 +1,4 @@
-"""Audits and real-sample checks for the prepared FIRST experiment."""
+"""Audits and real-sample checks for the prepared STSAU experiment."""
 from __future__ import annotations
 
 from collections import Counter
@@ -16,8 +16,8 @@ import PIL
 import torch
 from torch.utils.data import DataLoader
 
-from .losses import FIRSTNetLoss
-from .model import FIRSTNet
+from .losses import STSAUNetLoss
+from .model import STSAUNet
 
 
 def write_json(path, data):
@@ -131,7 +131,7 @@ def check_unfolding(dataset, model_config, batch_size, device, lr, reconstructio
                                 outputs=[list(x.shape) for x in (output if isinstance(output, tuple) else [output])])
         return capture
     # Legacy computation is exercised explicitly to document the old stage input.
-    legacy = FIRSTNet(**dict(model_config, unfolding_mode="framewise")).to(device).eval()
+    legacy = STSAUNet(**dict(model_config, unfolding_mode="framewise")).to(device).eval()
     handles = [legacy.separation.register_forward_hook(hook("before.FeatureSeparation")),
                legacy.separation.stages[0].register_forward_hook(hook("before.DeepUnfoldingStage.0"))]
     altered = frames.clone()
@@ -148,8 +148,8 @@ def check_unfolding(dataset, model_config, batch_size, device, lr, reconstructio
     if device.type == "cuda":
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(device)
-    model = FIRSTNet(**model_config).to(device)
-    handles = [model.register_forward_hook(lambda m,i,o: traces.update({"after.FIRSTNet": dict(input=list(i[0].shape), logits=list(o["logits"].shape))})),
+    model = STSAUNet(**model_config).to(device)
+    handles = [model.register_forward_hook(lambda m,i,o: traces.update({"after.STSAUNet": dict(input=list(i[0].shape), logits=list(o["logits"].shape))})),
                model.separation.register_forward_hook(hook("after.FeatureSeparation"))]
     handles.extend(stage.register_forward_hook(hook(f"after.DeepUnfoldingStage.{index}"))
                    for index, stage in enumerate(model.separation.stages))
@@ -170,7 +170,7 @@ def check_unfolding(dataset, model_config, batch_size, device, lr, reconstructio
         assert torch.allclose(singles, base, atol=1e-5, rtol=1e-4), batch_error
     del base, changed, singles, altered
     model.train()
-    criterion = FIRSTNetLoss(reconstruction_weight, alignment_weight, **(loss_config or {}))
+    criterion = STSAUNetLoss(reconstruction_weight, alignment_weight, **(loss_config or {}))
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     output = model(frames)
     assert output["logits"].shape == mask.shape == output["reconstruction"].shape
@@ -194,7 +194,7 @@ def check_unfolding(dataset, model_config, batch_size, device, lr, reconstructio
                   other_batch_sample_delta=independent_delta, batched_vs_single_max_error=batch_error,
                   batch_consistency_precision="float32; cuDNN TF32 disabled within this check only",
                   losses={key:float(value.detach()) for key,value in losses.items()},
-                  parameters_without_gradient=missing, first_unfold_weight_update_max=update,
+                  parameters_without_gradient=missing, leading_unfold_weight_update_max=update,
                   cuda_peak_allocated_gib=torch.cuda.max_memory_allocated(device)/2**30 if device.type=="cuda" else None,
                   elapsed_seconds=time.perf_counter()-start, sample_sequences=list(batch["sequence"]),
                   note="Throwaway model/optimizer; formal training is re-seeded and starts from scratch.")

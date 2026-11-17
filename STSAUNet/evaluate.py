@@ -1,23 +1,22 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
-from firstnet.dataset import InfraredSequenceDataset
-from firstnet.model import FIRSTNet
-from firstnet.evaluation import evaluate_loader
-from firstnet.experiment import write_json
-from firstnet.losses import FIRSTNetLoss
+from stsaunet.dataset import InfraredSequenceDataset
+from stsaunet.model import STSAUNet
+from stsaunet.evaluation import evaluate_loader
+from stsaunet.experiment import write_json
+from stsaunet.losses import STSAUNetLoss
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate a FIRST-Net checkpoint.")
+    parser = argparse.ArgumentParser(description="Evaluate a STSAUNet checkpoint.")
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--data-root", default=r"F:\FIRST-NET")
-    parser.add_argument("--dataset", default=None, help="Dataset folder or prepared FIRST source selector, e.g. FIRST_prepared@SIATD")
+    parser.add_argument("--data-root", required=True, help="External dataset directory or its parent.")
+    parser.add_argument("--dataset", default=None, help="Dataset folder or prepared STSAU source selector, e.g. STSAU_prepared@SIATD")
     parser.add_argument("--split", choices=("train", "val", "test", "all"), default="test")
     parser.add_argument("--image-size", type=int, default=None, help="Defaults to the checkpoint setting; use 0 for native size.")
     parser.add_argument("--batch-size", type=int, default=2)
@@ -45,11 +44,11 @@ def main() -> None:
     run_config = checkpoint.get("run_config", {})
     model_config = dict(checkpoint.get("model_config", run_config.get("model", {})))
     model_config.setdefault("unfolding_mode", "framewise")
-    dataset_name = args.dataset or run_config.get("dataset", "FIRST_dataset")
+    dataset_name = args.dataset or run_config.get("dataset", "STSAU_dataset")
     size = args.image_size if args.image_size is not None else run_config.get("image_size", 256)
     image_size = size if size and size > 0 else None
     window_size = model_config.get("window_size", 5)
-    model = FIRSTNet(**model_config).to(device)
+    model = STSAUNet(**model_config).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
 
@@ -64,7 +63,7 @@ def main() -> None:
         seed=run_config.get("seed", 1),
     )
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
-    criterion = FIRSTNetLoss(run_config.get("reconstruction_weight",0.01),run_config.get("alignment_weight",0.01),
+    criterion = STSAUNetLoss(run_config.get("reconstruction_weight",0.01),run_config.get("alignment_weight",0.01),
                              **run_config.get("loss_config", {}))
     results = evaluate_loader(model,loader,device,criterion,compute_objects=True,examples_dir=args.examples_dir)
     if args.output_json:
