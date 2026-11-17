@@ -14,6 +14,8 @@ python -m pip install -r requirements.txt
 
 ## 准备外部数据
 
+数据集下载：[STSAU 数据集（百度网盘）](https://pan.baidu.com/s/5F_ItCOxW5A6PCq6Zx8QqhQ)。
+
 `--data-root` 若直接指向含 `manifest.jsonl` 的数据根目录，`--dataset STSAU_wide9000` 只是逻辑名称，无需重命名磁盘上的数据目录。若传入的是父目录，`--dataset` 需要与实际子目录名一致。推荐使用以下预备数据格式：
 
 ```text
