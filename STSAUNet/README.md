@@ -1,8 +1,6 @@
 # STSAUNet
 
-这是面向红外小目标分割的 STSAUNet 独立源码目录。以推荐的七帧配置为例，模型输入为 `[B,7,1,H,W]`，将帧和通道合并为 `[B,7,H,W]`，依次展开更新背景与稀疏目标。随后恢复时间维，以 `grid_sample` 实现可变形时序对齐，输出第 4 帧的分割 logits `[B,1,H,W]`。预备数据格式采用 256×256 灰度帧。不需要 MMCV、自定义 CUDA 扩展或其他模型仓库。
-
-本目录不提供数据、权重或实验结果。项目许可证待权利人确认，第三方来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+这是面向红外小目标分割的 STSAUNet 独立源码目录。以推荐的七帧配置为例，模型输入为 `[B,7,1,H,W]`，将帧和通道合并为 `[B,7,H,W]`，依次展开更新背景与稀疏目标。随后恢复时间维，以 `grid_sample` 实现可变形时序对齐，输出第 4 帧的分割 logits `[B,1,H,W]`。预备数据格式采用 256×256 灰度帧。
 
 ## 安装
 
@@ -58,7 +56,7 @@ python train.py "@configs/wide9000_50ep.args" --data-root /path/to/dataset --out
 python infer.py --checkpoint outputs/train/best.pt --data-root /path/to/dataset --dataset STSAU_wide9000 --output-dir outputs/predictions --device auto
 ```
 
-训练从头初始化，按验证 IoU 保存 `best.pt`，每轮更新 `last.pt`。也可将 `--checkpoint` 换成用户自有的 STSAUNet 检查点（含 `model_config`、`model_state`）。只加载可信来源的 PyTorch 检查点。推理保存便于查看的灰度概率图和二值 mask；这些 PNG 不用于计算 ROC/PR。
+训练从头初始化，按验证 IoU 保存 `best.pt`，每轮更新 `last.pt`。也可将 `--checkpoint` 换成用户自有的 STSAUNet 检查点（含 `model_config`、`model_state`）。只加载可信来源的 PyTorch 检查点。推理保存便于查看的灰度概率图和二值 mask。
 
 ## 评估和复杂度
 
@@ -72,7 +70,7 @@ python -m stsaunet.benchmark.profile_model --checkpoint outputs/train/best.pt --
 
 基础评估给出固定阈值 0.5 下的 IoU、Precision、Recall、F1、PD 和 FA。PD 按 8 连通目标的质心在 3 像素内做一对一匹配，FA 是误报背景像素数除以真值背景像素总数。曲线入口使用预备数据中心帧 logits 的原始 sigmoid 浮点概率，按全像素、来源和标注类型分别输出指标。ROC 以像素 FPR 为横轴、TPR 为纵轴；低 FPR 指标取在给定误报预算下的最高观测 TPR，不插值。AP 和梯形 PR-AUC 分开报告；`--mode exact` 使用原始分数，数据量大时可选 `--mode histogram` 近似。绘图入口读取已导出的曲线；叠加曲线时要求各组数据使用同一批有序样本。若需要选择阈值，应先在验证集确定，再固定到测试集。
 
-复杂度统计包含一次完整片段推理和辅助重建头；卷积按 1 MAC = 2 FLOPs，采样及部分逐元素操作使用估算规则。输出 JSON 区分卷积计数、估算总量与未计数算子，不能把估算总量当作硬件实测。
+复杂度统计包含一次完整片段推理和辅助重建头；卷积按 1 MAC = 2 FLOPs，采样及部分逐元素操作使用估算规则。输出 JSON 区分卷积计数、估算总量与未计数算子。
 
 可以不使用数据或权重做 CPU 前向检查：
 
